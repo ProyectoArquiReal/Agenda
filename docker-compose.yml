@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agenda-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clinica_saas
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password
+      TZ: America/Guayaquil
+    ports:
+      - "5432:5432"
+    volumes:
+      - agenda_pgdata:/var/lib/postgresql/data
+      - ./database/migrations/0001_inits_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/migrations/0002_compatibilidad_citas_login.sql:/docker-entrypoint-initdb.d/02_compatibilidad.sql:ro
+      - ./database/seeds/seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
+      - ./database/dev/04_roles.sql:/docker-entrypoint-initdb.d/04_roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d clinica_saas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  agenda_pgdata:
