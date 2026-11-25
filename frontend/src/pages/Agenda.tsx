@@ -1,20 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CalendarX, ChevronLeft, ChevronRight, Phone, RefreshCw } from "lucide-react";
+import { AlertCircle, CalendarX, Check, ChevronLeft, ChevronRight, Loader2, Phone, RefreshCw, X } from "lucide-react";
 import type { Cita, EstadoCita } from "../types/cita";
-import { mensajeDeError, obtenerCitas, USANDO_MOCKS } from "../services/citasService";
-import { ESTADOS } from "../constants/estados";
+import { cambiarEstado, mensajeDeError, obtenerCitas, USANDO_MOCKS } from "../services/citasService";
+import { ESTADOS, ESTADOS_ACCIONABLES } from "../constants/estados";
 import { fechaLarga, horaLocal, hoy, sumarDias } from "../utils/fechas";
 import EstadoBadge from "../components/EstadoBadge";
 
-// Tablero Diario /agenda (T3.2 - ACM-11)
+type Aviso = { tipo: "ok" | "error"; texto: string };
+type OnAccion = (cita: Cita, nuevo: EstadoCita) => void;
+
+// Tablero Diario /agenda (T3.2 - ACM-11) + acciones Completar/Cancelar (T3.3 - ACM-12)
 export default function Agenda() {
   const [fecha, setFecha] = useState(hoy());
   const [citas, setCitas] = useState<Cita[]>([]);
   const [cargando, setCargando] = useState(true);
   const [errorCarga, setErrorCarga] = useState<string | null>(null);
   const [recargas, setRecargas] = useState(0);
+  // id de cita -> acción que se está procesando (para mostrar el spinner en ese botón)
+  const [procesando, setProcesando] = useState<Record<string, EstadoCita>>({});
+  const [aviso, setAviso] = useState<Aviso | null>(null);
 
-  // Cargar las citas de la fecha elegida
+  // ---- T3.2: cargar las citas de la fecha elegida ----
   useEffect(() => {
     let cancelado = false; // evita pintar datos de una fecha anterior si el usuario cambió rápido
     obtenerCitas(fecha)
@@ -33,6 +39,13 @@ export default function Agenda() {
       cancelado = true;
     };
   }, [fecha, recargas]);
+
+  // El aviso verde/rojo desaparece solo a los 4 segundos.
+  useEffect(() => {
+    if (!aviso) return;
+    const t = setTimeout(() => setAviso(null), 4000);
+    return () => clearTimeout(t);
+  }, [aviso]);
 
   function cambiarFecha(nueva: string) {
     if (!nueva || nueva === fecha) return;
@@ -56,6 +69,35 @@ export default function Agenda() {
     const cuenta = (e: EstadoCita) => citas.filter((c) => c.estado === e).length;
     return { total: citas.length, reservadas: cuenta("RESERVADA"), completadas: cuenta("COMPLETADA"), canceladas: cuenta("CANCELADA") };
   }, [citas]);
+
+  // ---- T3.3: Completar / Cancelar ----
+  const ejecutarAccion: OnAccion = async (cita, nuevo) => {
+    if (
+      nuevo === "CANCELADA" &&
+      !window.confirm(`¿Cancelar la cita de ${cita.paciente_nombre} a las ${horaLocal(cita.fecha_inicio)}?`)
+    ) {
+      return;
+    }
+
+    setProcesando((p) => ({ ...p, [cita.id]: nuevo }));
+    setAviso(null);
+    try {
+      const actualizada = await cambiarEstado(cita.id, nuevo);
+      // Se actualiza en pantalla sin recargar la página
+      setCitas((lista) =>
+        lista.map((c) => (c.id === cita.id ? { ...c, estado: actualizada?.estado ?? nuevo } : c)),
+      );
+      setAviso({ tipo: "ok", texto: `Cita de ${cita.paciente_nombre} marcada como ${ESTADOS[nuevo].etiqueta.toLowerCase()}.` });
+    } catch (error) {
+      setAviso({ tipo: "error", texto: mensajeDeError(error) });
+    } finally {
+      setProcesando((p) => {
+        const resto = { ...p };
+        delete resto[cita.id];
+        return resto;
+      });
+    }
+  };
 
   const esHoy = fecha === hoy();
 
@@ -109,6 +151,19 @@ export default function Agenda() {
         </div>
       )}
 
+      {/* Aviso tras una acción */}
+      {aviso && (
+        <div
+          role="status"
+          className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm ring-1 ${
+            aviso.tipo === "ok" ? "bg-emerald-50 text-emerald-800 ring-emerald-200" : "bg-rose-50 text-rose-800 ring-rose-200"
+          }`}
+        >
+          {aviso.tipo === "ok" ? <Check className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+          {aviso.texto}
+        </div>
+      )}
+
       {/* Contenido */}
       {cargando ? (
         <Esqueleto />
@@ -138,6 +193,7 @@ export default function Agenda() {
                   <th className="px-4 py-3">Servicio</th>
                   <th className="px-4 py-3">Especialista</th>
                   <th className="px-4 py-3">Estado</th>
+                  <th className="px-4 py-3 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -155,6 +211,9 @@ export default function Agenda() {
                     <td className="px-4 py-3">{c.especialista.nombre_completo}</td>
                     <td className="px-4 py-3">
                       <EstadoBadge estado={c.estado} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Acciones cita={c} enCurso={procesando[c.id]} onAccion={ejecutarAccion} />
                     </td>
                   </tr>
                 ))}
@@ -180,6 +239,9 @@ export default function Agenda() {
                 <p className="mt-2 text-sm text-slate-600">
                   {c.servicio.nombre} · {c.especialista.nombre_completo}
                 </p>
+                <div className="mt-3">
+                  <Acciones cita={c} enCurso={procesando[c.id]} onAccion={ejecutarAccion} />
+                </div>
               </li>
             ))}
           </ul>
@@ -190,6 +252,33 @@ export default function Agenda() {
 }
 
 // ---------- Componentes pequeños de esta página ----------
+
+function Acciones({ cita, enCurso, onAccion }: { cita: Cita; enCurso?: EstadoCita; onAccion: OnAccion }) {
+  if (!ESTADOS_ACCIONABLES.includes(cita.estado)) {
+    return <span className="block text-right text-xs text-slate-400 md:text-right">Sin acciones</span>;
+  }
+  const ocupado = enCurso !== undefined;
+  return (
+    <div className="flex gap-2 md:justify-end">
+      <button
+        onClick={() => onAccion(cita, "COMPLETADA")}
+        disabled={ocupado}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {enCurso === "COMPLETADA" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+        Completar
+      </button>
+      <button
+        onClick={() => onAccion(cita, "CANCELADA")}
+        disabled={ocupado}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {enCurso === "CANCELADA" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+        Cancelar
+      </button>
+    </div>
+  );
+}
 
 function Telefono({ telefono }: { telefono: string | null }) {
   if (!telefono) return <span className="block text-xs text-slate-400">Sin teléfono</span>;

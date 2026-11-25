@@ -1,6 +1,6 @@
 import { isAxiosError } from "axios";
 import { api } from "./api";
-import type { Cita } from "../types/cita";
+import type { Cita, EstadoCita } from "../types/cita";
 import { citasMock } from "../mocks/citas";
 import { fechaLocal } from "../utils/fechas";
 
@@ -35,7 +35,6 @@ export function mensajeDeError(error: unknown): string {
 }
 
 export const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
-export const mockErrores = () => MOCK_ERRORES;
 
 // GET /api/citas?fecha=YYYY-MM-DD  (baseURL de axios ya incluye /api)
 export async function obtenerCitas(fecha: string): Promise<Cita[]> {
@@ -48,4 +47,19 @@ export async function obtenerCitas(fecha: string): Promise<Cita[]> {
   }
   const { data } = await api.get<Cita[]>("/citas", { params: { fecha } });
   return data;
+}
+
+// PATCH /api/citas/:id/estado  (T3.3 - ACM-12)
+// Puede devolver la cita actualizada o nada (204), según cómo lo implemente el backend.
+export async function cambiarEstado(id: string, estado: EstadoCita): Promise<Cita | undefined> {
+  if (USANDO_MOCKS) {
+    await esperar(800);
+    if (MOCK_ERRORES) throw new ErrorMock(409, "Error simulado");
+    const cita = citasMock.find((c) => c.id === id);
+    if (!cita) throw new ErrorMock(404, "Cita no encontrada");
+    cita.estado = estado;
+    return { ...cita };
+  }
+  const { data } = await api.patch<Cita | undefined>(`/citas/${encodeURIComponent(id)}/estado`, { estado });
+  return data || undefined;
 }
